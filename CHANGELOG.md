@@ -1,3 +1,75 @@
+9.1.5
+-----
+
+* Fix race condition in RobustChannel in reopen/ready #566 by @isra17
+
+9.1.4
+-----
+
+* use fork friendly random robust queue generation way #560
+
+9.1.3
+-----
+
+* Ported publisher confirms tutorial by @MaPePeR #550
+* Fixed errored response when `aio_pika.patterns.RPC`
+  can not serialize the result #552
+
+9.1.2
+-----
+
+* Fix badges in docs
+
+9.1.1
+-----
+
+* Fix readthedocs build file
+
+9.1.0
+-----
+
+The bulk of the changes are related to how the library entities are now
+interconnected. In previous versions of `aio_pika.Channel` instances not
+contains a link to the `aio_pika.Connection` instances for now is contains it.
+
+While I don't want custom code to work directly with the `aiormq.Channel`
+instance, this was a public API and I should warn you about the change here.
+The `aio_pika.Channel.channel` property is deprecated. Use
+`aio_pika.Channel.get_underlay_chanel()` instead.
+Now all library entities already use this method.
+
+
+9.0.7
+-----
+
+* Update aiormq version
+
+9.0.6
+-----
+
+* Amend Exchange.__repr__ to include class name #527
+  Also switch to f-strings rather than %-formatting, modelled after
+  Queue.__repr__.
+* Update example code of rpc tutorial #530
+* bugfix: kwargs not working in `aio_pika.connect_robust` #531
+* Improve type hints for `queue.get()` #542
+
+9.0.5
+-----
+
+* Prevent 'Task exception was never retrieved' #524
+  If future.exception() is not called (even on cancelled futures), it seems Python
+  will then log 'Task exception was never retrieved'. Rewriting this logic
+  slightly should hopefully achieve the same functionality while
+  preventing the Python errors.
+* Avoid implicitly depending on setuptools #526
+
+9.0.4
+-----
+
+* fix README badge
+* upgrade requirements
+
 9.0.3
 -----
 

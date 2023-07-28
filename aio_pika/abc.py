@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import sys
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from enum import Enum, IntEnum, unique
@@ -7,14 +8,14 @@ from functools import singledispatch
 from types import TracebackType
 from typing import (
     Any, AsyncContextManager, AsyncIterable, Awaitable, Callable, Dict,
-    Generator, Iterator, Optional, Type, TypeVar, Union,
+    Generator, Iterator, Optional, Type, TypeVar, Union, overload,
 )
 
 
-try:
-    from typing import TypedDict
-except ImportError:
-    from typing_extensions import TypedDict
+if sys.version_info >= (3, 8):
+    from typing import Literal, TypedDict
+else:
+    from typing_extensions import Literal, TypedDict
 
 import aiormq.abc
 from aiormq.abc import ExceptionType
@@ -80,11 +81,6 @@ class DeclarationResult:
 
 class AbstractTransaction:
     state: TransactionState
-
-    @property
-    @abstractmethod
-    def channel(self) -> "AbstractChannel":
-        raise NotImplementedError
 
     @abstractmethod
     async def select(
@@ -244,7 +240,7 @@ class AbstractProcessContext(AsyncContextManager):
 
 
 class AbstractQueue:
-    channel: aiormq.abc.AbstractChannel
+    channel: "AbstractChannel"
     name: str
     durable: bool
     exclusive: bool
@@ -307,7 +303,7 @@ class AbstractQueue:
     @abstractmethod
     async def consume(
         self,
-        callback: Callable[[AbstractIncomingMessage], Any],
+        callback: Callable[[AbstractIncomingMessage], Awaitable[Any]],
         no_ack: bool = False,
         exclusive: bool = False,
         arguments: Arguments = None,
@@ -323,6 +319,20 @@ class AbstractQueue:
         nowait: bool = False,
     ) -> aiormq.spec.Basic.CancelOk:
         raise NotImplementedError
+
+    @overload
+    async def get(
+        self, *, no_ack: bool = False,
+        fail: Literal[True] = ..., timeout: TimeoutType = ...,
+    ) -> AbstractIncomingMessage:
+        ...
+
+    @overload
+    async def get(
+        self, *, no_ack: bool = False,
+        fail: Literal[False] = ..., timeout: TimeoutType = ...,
+    ) -> Optional[AbstractIncomingMessage]:
+        ...
 
     @abstractmethod
     async def get(
@@ -395,7 +405,7 @@ class AbstractExchange(ABC):
     @abstractmethod
     def __init__(
         self,
-        channel: aiormq.abc.AbstractChannel,
+        channel: "AbstractChannel",
         name: str,
         type: Union[ExchangeType, str] = ExchangeType.DIRECT,
         *,
@@ -514,9 +524,8 @@ class AbstractChannel(PoolInstance, ABC):
     def close(self, exc: Optional[ExceptionType] = None) -> Awaitable[None]:
         raise NotImplementedError
 
-    @property
     @abstractmethod
-    def channel(self) -> aiormq.abc.AbstractChannel:
+    async def get_underlay_channel(self) -> aiormq.abc.AbstractChannel:
         raise NotImplementedError
 
     @property
@@ -746,7 +755,7 @@ class AbstractConnection(PoolInstance, ABC):
 
 class AbstractRobustQueue(AbstractQueue):
     @abstractmethod
-    def restore(self, channel: aiormq.abc.AbstractChannel) -> Awaitable[None]:
+    def restore(self) -> Awaitable[None]:
         raise NotImplementedError
 
     @abstractmethod
@@ -777,7 +786,7 @@ class AbstractRobustQueue(AbstractQueue):
 
 class AbstractRobustExchange(AbstractExchange):
     @abstractmethod
-    def restore(self, channel: aiormq.abc.AbstractChannel) -> Awaitable[None]:
+    def restore(self) -> Awaitable[None]:
         raise NotImplementedError
 
     @abstractmethod
@@ -801,7 +810,7 @@ class AbstractRobustChannel(AbstractChannel):
         raise NotImplementedError
 
     @abstractmethod
-    async def restore(self, connection: aiormq.abc.AbstractConnection) -> None:
+    async def restore(self) -> None:
         raise NotImplementedError
 
     @abstractmethod

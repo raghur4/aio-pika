@@ -5,10 +5,9 @@ import time
 import uuid
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from aiormq.abc import ExceptionType
-from aiormq.tools import awaitable
 
 from aio_pika.abc import (
     AbstractChannel, AbstractExchange, AbstractIncomingMessage, AbstractQueue,
@@ -18,13 +17,11 @@ from aio_pika.exceptions import MessageProcessError
 from aio_pika.exchange import ExchangeType
 from aio_pika.message import IncomingMessage, Message, ReturnedMessage
 
-from .base import Base, Proxy
+from ..tools import ensure_awaitable
+from .base import Base, CallbackType, Proxy, T
 
 
 log = logging.getLogger(__name__)
-
-T = TypeVar("T")
-CallbackType = Callable[..., T]
 
 
 class RPCException(RuntimeError):
@@ -277,12 +274,22 @@ class RPC(Base):
             await message.ack()
             return
 
-        result_message = await self.serialize_message(
-            payload=result,
-            message_type=message_type,
-            correlation_id=message.correlation_id,
-            delivery_mode=message.delivery_mode,
-        )
+        try:
+            result_message = await self.serialize_message(
+                payload=result,
+                message_type=message_type,
+                correlation_id=message.correlation_id,
+                delivery_mode=message.delivery_mode,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            result_message = await self.serialize_message(
+                payload=e,
+                message_type=RPCMessageType.ERROR,
+                correlation_id=message.correlation_id,
+                delivery_mode=message.delivery_mode,
+            )
 
         try:
             await self.channel.default_exchange.publish(
@@ -390,6 +397,8 @@ class RPC(Base):
         arguments = kwargs.pop("arguments", {})
         arguments.update({"x-dead-letter-exchange": self.DLX_NAME})
 
+        func = ensure_awaitable(func)
+
         kwargs["arguments"] = arguments
 
         queue = await self.channel.declare_queue(method_name, **kwargs)
@@ -406,7 +415,7 @@ class RPC(Base):
             partial(self.on_call_message, method_name),
         )
 
-        self.routes[method_name] = awaitable(func)
+        self.routes[method_name] = func
         self.queues[func] = queue
 
     async def unregister(self, func: CallbackType) -> None:
@@ -457,7 +466,6 @@ class JsonRPC(RPC):
 
 
 __all__ = (
-    "CallbackType",
     "JsonRPC",
     "RPC",
     "RPCException",

@@ -1,21 +1,28 @@
 import asyncio
+import sys
 from functools import partial
 from types import TracebackType
-from typing import Any, Callable, Optional, Type
+from typing import Any, Awaitable, Callable, Optional, Type, overload
 
 import aiormq
 from aiormq.abc import DeliveredMessage
 from pamqp.common import Arguments
 
 from .abc import (
-    AbstractIncomingMessage, AbstractQueue, AbstractQueueIterator, ConsumerTag,
-    TimeoutType, get_exchange_name,
+    AbstractChannel, AbstractIncomingMessage, AbstractQueue,
+    AbstractQueueIterator, ConsumerTag, TimeoutType, get_exchange_name,
 )
 from .exceptions import QueueEmpty
 from .exchange import ExchangeParamType
 from .log import get_logger
 from .message import IncomingMessage
-from .tools import CallbackCollection, create_task
+from .tools import CallbackCollection, create_task, ensure_awaitable
+
+
+if sys.version_info >= (3, 8):
+    from typing import Literal
+else:
+    from typing_extensions import Literal
 
 
 log = get_logger(__name__)
@@ -35,7 +42,7 @@ class Queue(AbstractQueue):
 
     def __init__(
         self,
-        channel: aiormq.abc.AbstractChannel,
+        channel: AbstractChannel,
         name: Optional[str],
         durable: bool,
         exclusive: bool,
@@ -75,7 +82,8 @@ class Queue(AbstractQueue):
         :return: :class:`None`
         """
         log.debug("Declaring queue: %r", self)
-        self.declaration_result = await self.channel.queue_declare(
+        channel = await self.channel.get_underlay_channel()
+        self.declaration_result = await channel.queue_declare(
             queue=self.name,
             durable=self.durable,
             exclusive=self.exclusive,
@@ -128,7 +136,8 @@ class Queue(AbstractQueue):
             arguments,
         )
 
-        return await self.channel.queue_bind(
+        channel = await self.channel.get_underlay_channel()
+        return await channel.queue_bind(
             self.name,
             exchange=get_exchange_name(exchange),
             routing_key=routing_key,
@@ -166,7 +175,8 @@ class Queue(AbstractQueue):
             arguments,
         )
 
-        return await self.channel.queue_unbind(
+        channel = await self.channel.get_underlay_channel()
+        return await channel.queue_unbind(
             queue=self.name,
             exchange=get_exchange_name(exchange),
             routing_key=routing_key,
@@ -176,7 +186,7 @@ class Queue(AbstractQueue):
 
     async def consume(
         self,
-        callback: Callable[[AbstractIncomingMessage], Any],
+        callback: Callable[[AbstractIncomingMessage], Awaitable[Any]],
         no_ack: bool = False,
         exclusive: bool = False,
         arguments: Arguments = None,
@@ -188,7 +198,7 @@ class Queue(AbstractQueue):
 
         :param timeout: :class:`asyncio.TimeoutError` will be raises when the
                         Future was not finished after this time.
-        :param callback: Consuming callback. Could be a coroutine.
+        :param callback: Consuming callback. Should be a coroutine function.
         :param no_ack:
             if :class:`True` you don't need to call
             :func:`aio_pika.message.IncomingMessage.ack`
@@ -207,8 +217,10 @@ class Queue(AbstractQueue):
         """
 
         log.debug("Start to consuming queue: %r", self)
+        callback = ensure_awaitable(callback)
 
-        consume_result = await self.channel.basic_consume(
+        channel = await self.channel.get_underlay_channel()
+        consume_result = await channel.basic_consume(
             queue=self.name,
             consumer_callback=partial(
                 consumer,
@@ -252,9 +264,24 @@ class Queue(AbstractQueue):
         :return: Basic.CancelOk when operation completed successfully
         """
 
-        return await self.channel.basic_cancel(
+        channel = await self.channel.get_underlay_channel()
+        return await channel.basic_cancel(
             consumer_tag=consumer_tag, nowait=nowait, timeout=timeout,
         )
+
+    @overload
+    async def get(
+        self, *, no_ack: bool = False,
+        fail: Literal[True] = ..., timeout: TimeoutType = ...,
+    ) -> IncomingMessage:
+        ...
+
+    @overload
+    async def get(
+        self, *, no_ack: bool = False,
+        fail: Literal[False] = ..., timeout: TimeoutType = ...,
+    ) -> Optional[IncomingMessage]:
+        ...
 
     async def get(
         self, *, no_ack: bool = False,
@@ -271,7 +298,8 @@ class Queue(AbstractQueue):
         :return: :class:`aio_pika.message.IncomingMessage`
         """
 
-        msg: DeliveredMessage = await self.channel.basic_get(
+        channel = await self.channel.get_underlay_channel()
+        msg: DeliveredMessage = await channel.basic_get(
             self.name, no_ack=no_ack, timeout=timeout,
         )
 
@@ -294,7 +322,8 @@ class Queue(AbstractQueue):
 
         log.info("Purging queue: %r", self)
 
-        return await self.channel.queue_purge(
+        channel = await self.channel.get_underlay_channel()
+        return await channel.queue_purge(
             self.name, nowait=no_wait, timeout=timeout,
         )
 
@@ -313,7 +342,8 @@ class Queue(AbstractQueue):
 
         log.info("Deleting %r", self)
 
-        return await self.channel.queue_delete(
+        channel = await self.channel.get_underlay_channel()
+        return await channel.queue_delete(
             self.name,
             if_unused=if_unused,
             if_empty=if_empty,
